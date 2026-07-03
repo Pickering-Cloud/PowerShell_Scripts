@@ -1,0 +1,6 @@
+# Locally generated config, may contain real organisational values once deployed/tested.
+# Only SignFileConfig.json.example (the tracked template) should be committed.
+SignFileConfig.json
+
+# State file for a pending ADCS request, machine-specific, never meaningful to commit.
+pending-request-state.json

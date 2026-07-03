@@ -1,0 +1,9 @@
+{
+    "RequireADCSCertificate": null,
+    "UsePersonalCertificate": null,
+    "CompanyName": "Company Name Here",
+    "ValidityLength": 3,
+    "KeyLength": 2048,
+    "CertTemplate": "CodeSigning",
+    "TimestampingAuthority": null
+}
