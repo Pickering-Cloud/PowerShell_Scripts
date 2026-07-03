@@ -47,18 +47,29 @@ Signs one or more files with a code signing certificate, obtaining that certific
 
 ### Parameters
 
+#### Policy-governed
+ 
+These can be set via config file, which always takes precedence over the value shown here if both are present. See [Configuration file](#configuration-file).
+
 | Parameter | Type | Default | Description |
-|---|---|---|---|
-| `-RequireADCSCertificate` | switch | off | Only an ADCS-issued certificate is acceptable. Any ADCS failure stops the script rather than falling back to self-signed. |
-| `-Path` | string | none | Path to a single file to sign. If omitted, the interactive file picker is shown instead. |
-| `-ConfigFilePath` | string | `SignFileConfig.json` alongside the script | Path to the JSON config file. |
-| `-UsePersonalCertificate` | switch | off | Uses `Cert:CurrentUserMy` instead of `Cert:LocalMachineMy`. Does not require an elevated session, unlike the default. |
-| `-KeyLength` | int | `2048` | RSA key length (2048, 3072, or 4096) for a self-signed certificate. No effect on an ADCS-issued certificate. |
-| `-CertificateValidity` | int | `3` | Validity period, in years, for a self-signed certificate. No effect on an ADCS-issued certificate. |
-| `-CodeSigningTemplate` | string | `CodeSigning` | ADCS certificate template name (not display name, if they differ). |
-| `-CompanyName` | string | `Company Name Here` | Certificate subject name (CN). Override this before real use. |
-| `-TimestampingAuthority` | string | none | RFC 3161 timestamp server URL, e.g. `http://timestamp.digicert.com`. If omitted or unreachable, signing proceeds without a timestamp. |
-| `-BuildConfig` | switch | off | Writes a template config file to `-ConfigFilePath` using the script's current parameter values, then exits without signing anything. Always overwrites any existing file at that path. |
+|:---|:---:|:---|:---|
+| `-RequireADCSCertificate` | `switch` | `off` | Only an ADCS-issued certificate is acceptable. Any ADCS failure stops the script rather than falling back to self-signed. |
+| `-UsePersonalCertificate` | `switch` | `off` | Uses `Cert:\CurrentUser\My` instead of `Cert:\LocalMachine\My`. Does not require an elevated session, unlike the default. |
+| `-KeyLength` | `int` | `2048` | RSA key length (2048, 3072, or 4096) for a self-signed certificate. No effect on an ADCS-issued certificate. |
+| `-CertificateValidity` | `int` | `3` | Validity period, in years, for a self-signed certificate. No effect on an ADCS-issued certificate. |
+| `-CodeSigningTemplate` | `string` | `CodeSigning` | ADCS certificate template name (not display name, if they differ). |
+| `-CompanyName` | `string` | `Company Name Here` | Certificate subject name (CN). Override this before real use. |
+| `-TimestampingAuthority` | `string` | none | RFC 3161 timestamp server URL, e.g. `http://timestamp.digicert.com`. If omitted or unreachable, signing proceeds without a timestamp. |
+
+#### Runtime only
+ 
+Always taken from the command line, never overridden by config.
+ 
+| Parameter | Type | Default | Description |
+|:---|:---:|:---|:---|
+| `-Path` | `string` | none | Path to a single file to sign. If omitted, the interactive file picker is shown instead. |
+| `-ConfigFilePath` | `string` | `SignFileConfig.json` alongside the script | Path to the JSON config file. |
+| `-BuildConfig` | `switch` | `off` | Writes a template config file to `-ConfigFilePath` using the script's current parameter values, then exits without signing anything. Always overwrites any existing file at that path. |
 
 ## Configuration file
 
