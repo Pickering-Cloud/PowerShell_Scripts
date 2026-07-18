@@ -54,7 +54,7 @@
         Update Agent COM APIs.
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param (
     [switch]$AutomaticallyRemediate,
     [string]$CustomLogPath
@@ -125,20 +125,41 @@ while ($null -eq $loggingLevel) {
 
 # Writes to defined log file
 function Write-LogFile {
+    <#
+    .SYNOPSIS
+        Writes a message to the script's log file, subject to the configured logging level.
+    .DESCRIPTION
+        Appends a timestamped, level-tagged line to the log file at
+        $Script:logPath. The message is only written if its level is at or
+        above the session's configured $loggingLevel threshold (see
+        $logLevelMap). The log file is created read-only to prevent accidental
+        external editing/deletion; -Force is used here to bypass that
+        attribute specifically for this function's own writes.
+    .PARAMETER message
+        The text to log.
+    .PARAMETER level
+        The severity of this log entry. Must be one of Debug, Verbose, Info,
+        Warn, Error, or Critical. Compared against the session's configured
+        logging level threshold to decide whether the message is written.
+    .EXAMPLE
+        Write-LogFile -level Info -message "Sync completed successfully."
+
+        Writes an Info-level entry to the log file, provided the current
+        logging level is Info or lower severity (Debug/Verbose/Info).
+    .OUTPUTS
+        None. Writes to the log file as a side effect.
+    #>
+    [CmdletBinding()]
     param (
         [Parameter(Mandatory)]
         [string]$message,
-
         [Parameter(Mandatory)]
         [ValidateSet("Debug", "Verbose", "Info", "Warn", "Error", "Critical")]
         [string]$level
     )
-
     $logPath = $Script:logPath
     $level = $level.ToUpper()
-
     $levelValue = $logLevelMap[$level]
-
     if ($levelValue -ge $loggingLevel) {
         $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
         $line = "$timestamp | [$level] | $message"
@@ -158,21 +179,45 @@ catch {
 
 # Writes to Event Log
 function Write-LogEvent {
+    <#
+    .SYNOPSIS
+        Writes an entry to the Windows Application Event Log.
+    .DESCRIPTION
+        Wraps Write-EventLog, writing under the script's registered event
+        source (see Test-Prerequisites/the event source registration at the
+        top of the script). Used for the subset of conditions worth surfacing
+        to centralised monitoring, distinct from the full-fidelity file log
+        written via Write-LogFile.
+    .PARAMETER logSource
+        The event source to write under. Defaults to $Script:eventLogSource.
+    .PARAMETER logName
+        The event log to write to (e.g. "Application"). Defaults to
+        $Script:eventLogName.
+    .PARAMETER message
+        The text of the event.
+    .PARAMETER eventID
+        The event ID to log. See the project README for the full event ID map.
+    .PARAMETER entryType
+        The event's severity: Error, Warning, Information, SuccessAudit, or
+        FailureAudit.
+    .EXAMPLE
+        Write-LogEvent -eventID 1007 -entryType Error -message "WSUS sync failed after 3 attempt(s)."
+
+        Writes an Error-level event under the script's registered source.
+    .OUTPUTS
+        None. Writes to the Application event log as a side effect.
+    #>
+    [CmdletBinding()]
     param (
         [string]$logSource = $Script:eventLogSource,
-
         [string]$logName = $Script:eventLogName,
-
         [Parameter(Mandatory)]
         [string]$message,
-
         [Parameter(Mandatory)]
         [int]$eventID,
-
         [Parameter(Mandatory)]
         [System.Diagnostics.EventLogEntryType]$entryType
     )
-
     Write-EventLog -LogName $logName -Source $logSource -EntryType $entryType -Category 0 -EventId $eventID -Message $message
 }
 
@@ -190,10 +235,12 @@ Write-LogFile -level Verbose -message "Beginning configuration collection"
 Write-LogFile -level Debug -message "Pre-gpupdate WUServer=$initialWUServer; WUStatusServer=$initialWUStatusServer"
 
 Write-LogFile -level Verbose -message "Forcing Group Policy update"
-$groupPolicyResult = gpupdate /force /target:computer 2>&1
-Write-LogFile -level Debug -message "gpupdate output: $($groupPolicyResult -join ' | ')"
-if ($groupPolicyResult -match 'failed|error') {
-    Write-LogFile -level Warn -message "gpupdate output suggests a possible failure, review debug log output above."
+if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Force Group Policy update (gpupdate /force)')) {
+    $groupPolicyResult = gpupdate /force /target:computer 2>&1
+    Write-LogFile -level Debug -message "gpupdate output: $($groupPolicyResult -join ' | ')"
+    if ($groupPolicyResult -match 'failed|error') {
+        Write-LogFile -level Warn -message "gpupdate output suggests a possible failure, review debug log output above."
+    }
 }
 
 [System.Uri]$WUServer = (Get-ItemProperty -Path HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate -ErrorAction SilentlyContinue).WUServer
@@ -428,12 +475,14 @@ foreach ($service in $requiredServices) {
 
     if ($svc.StartType -eq "Disabled") {
         if ($AutomaticallyRemediate) {
-            try {
-                Set-Service -Name $service -StartupType Manual -ErrorAction Stop
-                Write-LogFile -level Warn -message "Service '$service' was Disabled, set to Manual."
-            }
-            catch {
-                Write-LogFile -level Error -message "Failed to change startup type for '$service': $($_.Exception.Message)"
+            if ($PSCmdlet.ShouldProcess($service, 'Set service startup type to Manual')) {
+                try {
+                    Set-Service -Name $service -StartupType Manual -ErrorAction Stop
+                    Write-LogFile -level Warn -message "Service '$service' was Disabled, set to Manual."
+                }
+                catch {
+                    Write-LogFile -level Error -message "Failed to change startup type for '$service': $($_.Exception.Message)"
+                }
             }
         }
         else {
@@ -445,12 +494,14 @@ foreach ($service in $requiredServices) {
 $wuauservStatus = (Get-Service -Name "wuauserv").Status
 if ($wuauservStatus -ne "Running") {
     if ($AutomaticallyRemediate) {
-        try {
-            Start-Service -Name "wuauserv" -ErrorAction Stop
-            Write-LogFile -level Warn -message "wuauserv was not running - service started"
-        }
-        catch {
-            Write-LogFile -level Error -message "wuauserv was not running - unable to start service: $($_.Exception.Message)"
+        if ($PSCmdlet.ShouldProcess("wuauserv", 'Start service')) {
+            try {
+                Start-Service -Name "wuauserv" -ErrorAction Stop
+                Write-LogFile -level Warn -message "wuauserv was not running - service started"
+            }
+            catch {
+                Write-LogFile -level Error -message "wuauserv was not running - unable to start service: $($_.Exception.Message)"
+            }
         }
     }
     else {
@@ -463,38 +514,57 @@ else {
 
 ########## Sync Attempt Logic ##########
 function Invoke-SyncAttempt {
-    if ($autoUpdate) {
+    <#
+    .SYNOPSIS
+        Attempts to trigger a Windows Update synchronisation via all available mechanisms.
+    .DESCRIPTION
+        Triggers detection/sync via the Windows Update Agent COM API, UsoClient,
+        and legacy wuauclt (in that order, each independently wrapped so one
+        failing doesn't prevent the others from running), waits, then checks
+        whether LastSuccessTime indicates a genuinely recent successful
+        detection.
+    .OUTPUTS
+        System.Boolean. $true if a successful detection was recorded within
+        the last 5 minutes, otherwise $false.
+    .EXAMPLE
+        Invoke-SyncAttempt
+
+        Triggers a synchronisation attempt and returns whether it succeeded.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    if ($PSCmdlet.ShouldProcess('Windows Update', 'Trigger synchronisation attempt')) {
+        if ($autoUpdate) {
+            try {
+                $autoUpdate.DetectNow()
+                Write-LogFile -level Verbose -message "COM API DetectNow triggered."
+            }
+            catch {
+                Write-LogFile -level Warn -message "COM API DetectNow failed: $($_.Exception.Message)"
+            }
+        }
         try {
-            $autoUpdate.DetectNow()
-            Write-LogFile -level Verbose -message "COM API DetectNow triggered."
+            $usoResult = & "$env:SystemRoot\System32\UsoClient.exe" ScanInstallWait 2>&1
+            Write-LogFile -level Verbose -message "UsoClient ScanInstallWait output: $($usoResult -join ' ')"
         }
         catch {
-            Write-LogFile -level Warn -message "COM API DetectNow failed: $($_.Exception.Message)"
+            Write-LogFile -level Warn -message "UsoClient ScanInstallWait failed: $($_.Exception.Message)"
         }
+        try {
+            & "$env:SystemRoot\System32\wuauclt.exe" /detectnow /reportnow
+            Write-LogFile -level Verbose -message "wuauclt /detectnow /reportnow invoked."
+        }
+        catch {
+            Write-LogFile -level Warn -message "wuauclt failed: $($_.Exception.Message)"
+        }
+        Start-Sleep -Seconds 60
+        $lastSuccess = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Detect" -Name "LastSuccessTime" -ErrorAction SilentlyContinue).LastSuccessTime
+        Write-LogFile -level Debug -message "LastSuccessTime read as: $lastSuccess"
+        return [bool]($lastSuccess -and ((Get-Date) - [DateTime]$lastSuccess).TotalMinutes -le 5)
     }
 
-    try {
-        $usoResult = & "$env:SystemRoot\System32\UsoClient.exe" ScanInstallWait 2>&1
-        Write-LogFile -level Verbose -message "UsoClient ScanInstallWait output: $($usoResult -join ' ')"
-    }
-    catch {
-        Write-LogFile -level Warn -message "UsoClient ScanInstallWait failed: $($_.Exception.Message)"
-    }
-
-    try {
-        & "$env:SystemRoot\System32\wuauclt.exe" /detectnow /reportnow
-        Write-LogFile -level Verbose -message "wuauclt /detectnow /reportnow invoked."
-    }
-    catch {
-        Write-LogFile -level Warn -message "wuauclt failed: $($_.Exception.Message)"
-    }
-
-    Start-Sleep -Seconds 60
-
-    $lastSuccess = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Detect" -Name "LastSuccessTime" -ErrorAction SilentlyContinue).LastSuccessTime
-    Write-LogFile -level Debug -message "LastSuccessTime read as: $lastSuccess"
-
-    return [bool]($lastSuccess -and ((Get-Date) - [DateTime]$lastSuccess).TotalMinutes -le 5)
+    return $false
 }
 
 ########## Attempt Synchronisation ##########
@@ -572,162 +642,281 @@ Write-LogFile -level Verbose -message "Beginning remediation phase (Automaticall
 # Repair actions - called by multiple repair functions
 
 function Invoke-SFCScanOnce {
+    <#
+    .SYNOPSIS
+        Runs sfc /scannow once per script execution.
+    .DESCRIPTION
+        Runs the System File Checker to repair corrupted system files, but only
+        once per session, tracked via $Script:sfcAlreadyRun, since this is a
+        genuinely expensive operation that multiple Repair-<code> functions may
+        otherwise trigger redundantly if the same underlying fix applies to
+        several detected error codes.
+    .OUTPUTS
+        None. Writes sfc's output to the log file as a side effect.
+    .EXAMPLE
+        Invoke-SFCScanOnce
+
+        Runs sfc /scannow if it hasn't already run this session.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
     if ($Script:sfcAlreadyRun) {
         Write-LogFile -level Verbose -message "sfc /scannow already run this session, skipping."
         return
     }
-    Write-LogFile -level Verbose -message "Running sfc /scannow."
-    $sfcOutput = sfc /scannow 2>&1
-    Write-LogFile -level Verbose -message "sfc /scannow output: $($sfcOutput -join ' ')"
-    $Script:sfcAlreadyRun = $true
+
+    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Run sfc /scannow')) {
+        Write-LogFile -level Verbose -message "Running sfc /scannow."
+        $sfcOutput = sfc /scannow 2>&1
+        Write-LogFile -level Verbose -message "sfc /scannow output: $($sfcOutput -join ' ')"
+        $Script:sfcAlreadyRun = $true
+    }
 }
 
 function Invoke-DISMRestoreHealthOnce {
+    <#
+    .SYNOPSIS
+        Runs DISM /Online /Cleanup-Image /RestoreHealth once per script execution.
+    .DESCRIPTION
+        Runs DISM's component store repair, but only once per session, tracked
+        via $Script:dismAlreadyRun, since this is a genuinely expensive
+        operation that multiple Repair-<code> functions may otherwise trigger
+        redundantly if the same underlying fix applies to several detected
+        error codes.
+    .OUTPUTS
+        None. Writes DISM's output to the log file as a side effect.
+    .EXAMPLE
+        Invoke-DISMRestoreHealthOnce
+
+        Runs DISM /Online /Cleanup-Image /RestoreHealth if it hasn't already
+        run this session.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
     if ($Script:dismAlreadyRun) {
         Write-LogFile -level Verbose -message "DISM /RestoreHealth already run this session, skipping."
         return
     }
-    Write-LogFile -level Verbose -message "Running DISM /Online /Cleanup-Image /RestoreHealth."
-    $dismOutput = DISM /Online /Cleanup-Image /RestoreHealth 2>&1
-    Write-LogFile -level Verbose -message "DISM output: $($dismOutput -join ' ')"
-    $Script:dismAlreadyRun = $true
+
+    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Run DISM /Online /Cleanup-Image /RestoreHealth')) {
+        Write-LogFile -level Verbose -message "Running DISM /Online /Cleanup-Image /RestoreHealth."
+        $dismOutput = DISM /Online /Cleanup-Image /RestoreHealth 2>&1
+        Write-LogFile -level Verbose -message "DISM output: $($dismOutput -join ' ')"
+        $Script:dismAlreadyRun = $true
+    }
 }
 
 function Invoke-ResetFolderCache {
+    <#
+    .SYNOPSIS
+        Resets the SoftwareDistribution and catroot2 folders, once per script execution.
+    .DESCRIPTION
+        Stops wuauserv, bits, and cryptsvc, renames SoftwareDistribution and
+        catroot2 to .old backups (clearing any existing backup from a previous
+        run first), then restarts the services regardless of whether the
+        rename succeeded, via a finally block, so a failed reset never leaves
+        Windows Update services stopped. Only runs once per session, tracked
+        via $Script:sdFolderResetAlreadyRun.
+    .OUTPUTS
+        None. Renames folders on disk and logs the outcome of each step.
+    .EXAMPLE
+        Invoke-ResetFolderCache
+
+        Resets the SoftwareDistribution and catroot2 folders if this hasn't
+        already run this session.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
     if ($Script:sdFolderResetAlreadyRun) {
         Write-LogFile -level Verbose -message "SoftwareDistribution/catroot2 reset already run this session, skipping."
         return
     }
 
-    Write-LogFile -level Info -message "Resetting SoftwareDistribution and catroot2 folders."
-
-    $sdServices = @("wuauserv", "bits", "cryptsvc")
-    $foldersToReset = @(
-        @{ Path = "$env:SystemRoot\SoftwareDistribution"; BackupName = "SoftwareDistribution.old" },
-        @{ Path = "$env:SystemRoot\System32\catroot2"; BackupName = "catroot2.old" }
-    )
-
-    try {
-        foreach ($service in $sdServices) {
-            try {
-                Stop-Service -Name $service -Force -ErrorAction Stop
-                Write-LogFile -level Verbose -message "Stopped service '$service'."
-            }
-            catch {
-                Write-LogFile -level Warn -message "Failed to stop service '$service': $($_.Exception.Message)"
-            }
-        }
-
-        foreach ($folder in $foldersToReset) {
-            $backupPath = Join-Path -Path (Split-Path -Path $folder.Path -Parent) -ChildPath $folder.BackupName
-
-            if (Test-Path -Path $backupPath) {
-                Write-LogFile -level Verbose -message "Removing existing backup at '$backupPath' from a previous run."
-                Remove-Item -Path $backupPath -Recurse -Force -ErrorAction SilentlyContinue
-            }
-
-            if (Test-Path -Path $folder.Path) {
+    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Reset SoftwareDistribution and catroot2 folders')) {
+        Write-LogFile -level Info -message "Resetting SoftwareDistribution and catroot2 folders."
+        $sdServices = @("wuauserv", "bits", "cryptsvc")
+        $foldersToReset = @(
+            @{ Path = "$env:SystemRoot\SoftwareDistribution"; BackupName = "SoftwareDistribution.old" },
+            @{ Path = "$env:SystemRoot\System32\catroot2"; BackupName = "catroot2.old" }
+        )
+        try {
+            foreach ($service in $sdServices) {
                 try {
-                    Rename-Item -Path $folder.Path -NewName $folder.BackupName -ErrorAction Stop
-                    Write-LogFile -level Info -message "Renamed '$($folder.Path)' to '$($folder.BackupName)'."
+                    Stop-Service -Name $service -Force -ErrorAction Stop
+                    Write-LogFile -level Verbose -message "Stopped service '$service'."
                 }
                 catch {
-                    Write-LogFile -level Error -message "Failed to rename '$($folder.Path)': $($_.Exception.Message)"
+                    Write-LogFile -level Warn -message "Failed to stop service '$service': $($_.Exception.Message)"
                 }
             }
-            else {
-                Write-LogFile -level Warn -message "Folder not found at '$($folder.Path)', nothing to rename."
+            foreach ($folder in $foldersToReset) {
+                $backupPath = Join-Path -Path (Split-Path -Path $folder.Path -Parent) -ChildPath $folder.BackupName
+                if (Test-Path -Path $backupPath) {
+                    Write-LogFile -level Verbose -message "Removing existing backup at '$backupPath' from a previous run."
+                    Remove-Item -Path $backupPath -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                if (Test-Path -Path $folder.Path) {
+                    try {
+                        Rename-Item -Path $folder.Path -NewName $folder.BackupName -ErrorAction Stop
+                        Write-LogFile -level Info -message "Renamed '$($folder.Path)' to '$($folder.BackupName)'."
+                    }
+                    catch {
+                        Write-LogFile -level Error -message "Failed to rename '$($folder.Path)': $($_.Exception.Message)"
+                    }
+                }
+                else {
+                    Write-LogFile -level Warn -message "Folder not found at '$($folder.Path)', nothing to rename."
+                }
             }
         }
-    }
-    finally {
-        foreach ($service in $sdServices) {
-            try {
-                Start-Service -Name $service -ErrorAction Stop
-                Write-LogFile -level Verbose -message "Started service '$service'."
-            }
-            catch {
-                Write-LogFile -level Error -message "Failed to restart service '$service': $($_.Exception.Message). This service may need manual attention."
-                Write-LogEvent -eventID 1015 -entryType Error -message "Failed to restart service '$service' after remediation. Manual attention required."
+        finally {
+            foreach ($service in $sdServices) {
+                try {
+                    Start-Service -Name $service -ErrorAction Stop
+                    Write-LogFile -level Verbose -message "Started service '$service'."
+                }
+                catch {
+                    Write-LogFile -level Error -message "Failed to restart service '$service': $($_.Exception.Message). This service may need manual attention."
+                    Write-LogEvent -eventID 1015 -entryType Error -message "Failed to restart service '$service' after remediation. Manual attention required."
+                }
             }
         }
+        $Script:sdFolderResetAlreadyRun = $true
     }
-
-    $Script:sdFolderResetAlreadyRun = $true
 }
 
 function Invoke-BitsQueueReset {
+    <#
+    .SYNOPSIS
+        Removes stuck or errored jobs from the BITS transfer queue, once per script execution.
+    .DESCRIPTION
+        Queries all BITS transfer jobs (all users, requires elevation) and
+        removes any in an Error, TransientError, or Suspended state. If the
+        query itself fails (the API doesn't respond), escalates to the more
+        invasive Invoke-BitsQueueFileReset. Only runs once per session, tracked
+        via $Script:bitsQueueResetAlreadyRun.
+    .OUTPUTS
+        None. Removes problem BITS jobs and logs the outcome.
+    .EXAMPLE
+        Invoke-BitsQueueReset
+
+        Checks the BITS transfer queue and removes any problem jobs, if this
+        hasn't already run this session.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
     if ($Script:bitsQueueResetAlreadyRun) {
         Write-LogFile -level Verbose -message "BITS queue reset already run this session, skipping."
         return
     }
 
-    Write-LogFile -level Info -message "Checking BITS transfer queue for stuck or errored jobs."
-
-    try {
-        $bitsJobs = Get-BitsTransfer -AllUsers -ErrorAction Stop
-        $problemJobs = $bitsJobs | Where-Object { $_.JobState -in @('Error', 'TransientError', 'Suspended') }
-
-        if ($problemJobs) {
-            foreach ($job in $problemJobs) {
-                Write-LogFile -level Warn -message "Removing BITS job '$($job.DisplayName)' (State: $($job.JobState))."
-                try {
-                    Remove-BitsTransfer -BitsJob $job -ErrorAction Stop
-                }
-                catch {
-                    Write-LogFile -level Error -message "Failed to remove BITS job '$($job.DisplayName)': $($_.Exception.Message)"
+    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Check and reset BITS transfer queue')) {
+        Write-LogFile -level Info -message "Checking BITS transfer queue for stuck or errored jobs."
+        try {
+            $bitsJobs = Get-BitsTransfer -AllUsers -ErrorAction Stop
+            $problemJobs = $bitsJobs | Where-Object { $_.JobState -in @('Error', 'TransientError', 'Suspended') }
+            if ($problemJobs) {
+                foreach ($job in $problemJobs) {
+                    Write-LogFile -level Warn -message "Removing BITS job '$($job.DisplayName)' (State: $($job.JobState))."
+                    try {
+                        Remove-BitsTransfer -BitsJob $job -ErrorAction Stop
+                    }
+                    catch {
+                        Write-LogFile -level Error -message "Failed to remove BITS job '$($job.DisplayName)': $($_.Exception.Message)"
+                    }
                 }
             }
+            else {
+                Write-LogFile -level Verbose -message "No problem BITS jobs found in queue."
+            }
         }
-        else {
-            Write-LogFile -level Verbose -message "No problem BITS jobs found in queue."
+        catch {
+            Write-LogFile -level Warn -message "Failed to query BITS transfer queue via API: $($_.Exception.Message). Escalating to file-level reset."
+            Invoke-BitsQueueFileReset
         }
+        $Script:bitsQueueResetAlreadyRun = $true
     }
-    catch {
-        Write-LogFile -level Warn -message "Failed to query BITS transfer queue via API: $($_.Exception.Message). Escalating to file-level reset."
-        Invoke-BitsQueueFileReset
-    }
-
-    $Script:bitsQueueResetAlreadyRun = $true
 }
 
 function Invoke-BitsQueueFileReset {
+    <#
+    .SYNOPSIS
+        Performs a file-level reset of the BITS transfer queue, once per script execution.
+    .DESCRIPTION
+        More invasive fallback for when the API-based approach
+        (Invoke-BitsQueueReset) can't run at all. Stops the BITS service,
+        deletes the queue database files directly, and restarts the service
+        regardless of whether the deletion succeeded, via a finally block, so
+        a failed reset never leaves BITS stopped. Only runs once per session,
+        tracked via $Script:bitsQueueFileResetAlreadyRun.
+    .OUTPUTS
+        None. Deletes BITS queue files on disk and logs the outcome.
+    .EXAMPLE
+        Invoke-BitsQueueFileReset
+
+        Performs a file-level BITS queue reset if this hasn't already run
+        this session.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
     if ($Script:bitsQueueFileResetAlreadyRun) {
         Write-LogFile -level Verbose -message "BITS queue file reset already run this session, skipping."
         return
     }
 
-    Write-LogFile -level Verbose -message "Performing file-level BITS queue reset."
-
-    $downloaderPath = "$env:ProgramData\Microsoft\Network\Downloader"
-
-    try {
-        Stop-Service -Name bits -Force -ErrorAction Stop
-
-        Get-ChildItem -Path $downloaderPath -Filter "qmgr*" -ErrorAction SilentlyContinue | ForEach-Object {
-            Write-LogFile -level Warn -message "Removing BITS queue file: $($_.Name)"
-            Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
-        }
-    }
-    catch {
-        Write-LogFile -level Error -message "File-level BITS queue reset failed: $($_.Exception.Message)"
-    }
-    finally {
+    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Perform file-level BITS queue reset')) {
+        Write-LogFile -level Verbose -message "Performing file-level BITS queue reset."
+        $downloaderPath = "$env:ProgramData\Microsoft\Network\Downloader"
         try {
-            Start-Service -Name bits -ErrorAction Stop
+            Stop-Service -Name bits -Force -ErrorAction Stop
+            Get-ChildItem -Path $downloaderPath -Filter "qmgr*" -ErrorAction SilentlyContinue | ForEach-Object {
+                Write-LogFile -level Warn -message "Removing BITS queue file: $($_.Name)"
+                Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
+            }
         }
         catch {
-            Write-LogFile -level Error -message "Failed to restart BITS service: $($_.Exception.Message). This service may need manual attention."
-            Write-LogEvent -eventID 1015 -entryType Error -message "Failed to restart BITS service after remediation. Manual attention required."
+            Write-LogFile -level Error -message "File-level BITS queue reset failed: $($_.Exception.Message)"
         }
+        finally {
+            try {
+                Start-Service -Name bits -ErrorAction Stop
+            }
+            catch {
+                Write-LogFile -level Error -message "Failed to restart BITS service: $($_.Exception.Message). This service may need manual attention."
+                Write-LogEvent -eventID 1015 -entryType Error -message "Failed to restart BITS service after remediation. Manual attention required."
+            }
+        }
+        $Script:bitsQueueFileResetAlreadyRun = $true
     }
-
-    $Script:bitsQueueFileResetAlreadyRun = $true
 }
 
 # Error code repairs
 
 function Repair-8000FFFF {
+    <#
+    .SYNOPSIS
+        Remediation for error code 0x8000FFFF (generic unexpected error).
+    .DESCRIPTION
+        Attempts a general component repair by running DISM /RestoreHealth
+        followed by sfc /scannow, since 0x8000FFFF (E_UNEXPECTED) is too
+        generic to diagnose more specifically. Delegates to the shared,
+        idempotent Invoke-DISMRestoreHealthOnce and Invoke-SFCScanOnce
+        functions, which handle their own ShouldProcess gating.
+    .OUTPUTS
+        None. Logs the remediation attempt and delegates to shared repair actions.
+    .EXAMPLE
+        Repair-8000FFFF
+
+        Attempts a DISM and SFC repair for a generic unexpected error.
+    #>
+    [CmdletBinding()]
+    param()
+
     Write-LogFile -level Info -message "Repair-8000FFFF: generic unexpected error, attempting component repair."
     Write-LogEvent -eventID 1009 -entryType Warning -message "Repair-8000FFFF invoked: generic unexpected error."
     Invoke-DISMRestoreHealthOnce
@@ -735,6 +924,25 @@ function Repair-8000FFFF {
 }
 
 function Repair-800F0831 {
+    <#
+    .SYNOPSIS
+        Remediation for error code 0x800F0831 (component store corruption).
+    .DESCRIPTION
+        Attempts a component store repair by running DISM /RestoreHealth
+        followed by sfc /scannow, per CBS.log indicating WinSxS corruption.
+        Delegates to the shared, idempotent Invoke-DISMRestoreHealthOnce and
+        Invoke-SFCScanOnce functions, which handle their own ShouldProcess
+        gating.
+    .OUTPUTS
+        None. Logs the remediation attempt and delegates to shared repair actions.
+    .EXAMPLE
+        Repair-800F0831
+
+        Attempts a DISM and SFC repair for detected component store corruption.
+    #>
+    [CmdletBinding()]
+    param()
+
     Write-LogFile -level Info -message "Repair-800F0831: component store corruption detected, attempting repair."
     Write-LogEvent -eventID 1010 -entryType Warning -message "Repair-800F0831 invoked: component store corruption."
     Invoke-DISMRestoreHealthOnce
@@ -742,6 +950,26 @@ function Repair-800F0831 {
 }
 
 function Repair-80244022 {
+    <#
+    .SYNOPSIS
+        Remediation for error code 0x80244022 (WSUS server reported overloaded/unavailable).
+    .DESCRIPTION
+        Resets local caches that can help when the WSUS server itself reports
+        being temporarily overloaded (WU_E_PT_HTTP_STATUS_SERVICE_UNAVAIL),
+        per Microsoft's own guidance for this status code. Delegates to the
+        shared, idempotent Invoke-ResetFolderCache and Invoke-BitsQueueReset
+        functions, which handle their own ShouldProcess gating.
+    .OUTPUTS
+        None. Logs the remediation attempt and delegates to shared repair actions.
+    .EXAMPLE
+        Repair-80244022
+
+        Resets the SoftwareDistribution/catroot2 folders and BITS queue in
+        response to a WSUS server overloaded/unavailable error.
+    #>
+    [CmdletBinding()]
+    param()
+
     Write-LogFile -level Info -message "Repair-80244022: WSUS server reported overloaded/unavailable, resetting local cache."
     Write-LogEvent -eventID 1011 -entryType Warning -message "Repair-80244022 invoked: WSUS server overloaded/unavailable."
     Invoke-ResetFolderCache
@@ -749,19 +977,82 @@ function Repair-80244022 {
 }
 
 function Repair-80072EE2 {
+    <#
+    .SYNOPSIS
+        Remediation for error code 0x80072EE2 (timeout reaching WSUS server).
+    .DESCRIPTION
+        This error typically indicates a network, firewall, or WSUS server
+        load issue rather than something locally repairable, so no component
+        repair is attempted. Clears the local DNS client cache in case of
+        stale resolution, then re-checks port connectivity and logs the
+        result for investigation.
+    .OUTPUTS
+        None. Clears the DNS client cache and logs the outcome.
+    .EXAMPLE
+        Repair-80072EE2
+
+        Clears the DNS cache and re-checks connectivity to the configured
+        WSUS server following a timeout error.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
     Write-LogFile -level Warn -message "Repair-80072EE2: timeout reaching WSUS server. This is typically network/firewall/server-load related, not locally repairable."
-    Clear-DnsClientCache
+
+    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Clear DNS client cache')) {
+        Clear-DnsClientCache
+    }
+
     $retryPortCheck = Test-NetConnection -ComputerName $WUServer.Host -Port $WUServer.Port -InformationLevel Quiet -ErrorAction SilentlyContinue
     Write-LogFile -level Info -message "Retry port check result: $retryPortCheck"
     Write-LogEvent -eventID 1012 -entryType Warning -message "Timeout reaching WSUS server, may require network/firewall investigation."
 }
 
 function Repair-80072EE5 {
+    <#
+    .SYNOPSIS
+        Remediation for error code 0x80072EE5 (malformed WSUS URL).
+    .DESCRIPTION
+        This error typically indicates a trailing slash or other malformation
+        in the WUServer registry value, which is a GPO-managed policy setting.
+        Deliberately does not modify the value automatically, since doing so
+        would override a deliberate administrative decision, logs the issue
+        with guidance instead.
+    .OUTPUTS
+        None. Logs the issue for manual policy correction.
+    .EXAMPLE
+        Repair-80072EE5
+
+        Logs guidance for correcting a malformed WSUS server URL in Group
+        Policy.
+    #>
+    [CmdletBinding()]
+    param()
+
     Write-LogFile -level Error -message "Repair-80072EE5: WUServer URL appears malformed (check for a trailing slash). Current value: $($WUServer.OriginalString). This is a policy-managed setting and will not be modified automatically."
     Write-LogEvent -eventID 1013 -entryType Error -message "WSUS server URL is malformed, requires GPO/policy correction."
 }
 
 function Repair-8024002E {
+    <#
+    .SYNOPSIS
+        Remediation for error code 0x8024002E (Windows Update disabled by policy).
+    .DESCRIPTION
+        This error indicates Windows Update access has been intentionally
+        disabled via Group Policy. Deliberately does not override this
+        automatically, since doing so would reverse a deliberate
+        administrative decision, logs the issue with guidance instead.
+    .OUTPUTS
+        None. Logs the issue for manual policy review.
+    .EXAMPLE
+        Repair-8024002E
+
+        Logs guidance noting that Windows Update access is disabled by policy
+        and will not be overridden.
+    #>
+    [CmdletBinding()]
+    param()
+
     Write-LogFile -level Error -message "Repair-8024002E: Windows Update access is disabled by policy on this machine. This will not be overridden automatically."
     Write-LogEvent -eventID 1014 -entryType Error -message "Windows Update access disabled by policy on $env:COMPUTERNAME."
 }

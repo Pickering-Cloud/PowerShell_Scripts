@@ -153,21 +153,23 @@ function New-SignFileConfig {
     <#
     .SYNOPSIS
         Writes a config file populated with the script's current parameter values.
-
     .DESCRIPTION
         Builds a JSON config file from whatever values the top-level script
         parameters currently hold, defaults where set, $null where not. Always
         writes unconditionally, since this function only ever runs as a direct
         result of -BuildConfig, at which point any existing file at the target
         path is deliberately being replaced.
+    .EXAMPLE
+        New-SignFileConfig
 
+        Writes a config file to $ConfigFilePath using the current session's
+        top-level parameter values (RequireADCSCertificate, CompanyName, etc.).
+        Only ever called internally when -BuildConfig is passed to the script.
     .OUTPUTS
         None. Writes the config file to disk at $ConfigFilePath.
     #>
-
     [CmdletBinding(SupportsShouldProcess)]
     param()
-
     if ($RequireADCSCertificate.IsPresent) {
         $RequireADCSCertificateJSON = $true
     }
@@ -180,7 +182,6 @@ function New-SignFileConfig {
     else {
         $UsePersonalCertificateJSON = $null
     }
-
     $configTemplate = [ordered]@{
         RequireADCSCertificate = $RequireADCSCertificateJSON 
         UsePersonalCertificate = $UsePersonalCertificateJSON
@@ -190,7 +191,6 @@ function New-SignFileConfig {
         CertTemplate            = $CodeSigningTemplate
         TimestampingAuthority   = $TimestampingAuthority
     }
-
     if ($PSCmdlet.ShouldProcess($ConfigFilePath, 'Write config file')) {
         $configTemplate | ConvertTo-Json -Depth 3 | Set-Content -Path $ConfigFilePath -Encoding UTF8 -Force
         Write-Verbose "Config file written to '$ConfigFilePath'."
@@ -202,7 +202,6 @@ function Test-Prerequisites {
     <#
     .SYNOPSIS
         Verifies the PKI module is available before the script proceeds.
-
     .DESCRIPTION
         Checks whether the PKI module (which provides Get-Certificate, used for
         ADCS enrollment) is present on the machine. This is a Windows-native
@@ -210,17 +209,19 @@ function Test-Prerequisites {
         something installable from the PowerShell Gallery, so a missing module
         is reported with guidance on enabling the correct Windows feature rather
         than attempted installation.
+    .EXAMPLE
+        Test-Prerequisites
 
+        Checks for the PKI module and throws a terminating error with
+        remediation guidance if it isn't available.
     .OUTPUTS
         None. Throws a terminating error if the PKI module is unavailable.
     #>
     [CmdletBinding()]
     param()
-
     if (-not (Get-Module -ListAvailable -Name PKI)) {
         throw "The PKI module is not available on this machine. It ships with the AD CS Remote Server Administration Tools feature (Windows 8.1 / Server 2012 R2 and later). Enable it via 'Add-WindowsFeature RSAT-ADCS' (Server) or the Windows Optional Features UI (client), then re-run this script."
     }
-
     Import-Module -Name PKI -Scope Local -ErrorAction Stop
     Write-Verbose "PKI module loaded successfully."
 }
@@ -264,11 +265,18 @@ function Get-ScriptVariables {
     .PARAMETER timestampServer
         Command line value for the RFC 3161 timestamp server URL.
 
+    .EXAMPLE
+        Get-ScriptVariables -ConfigFilePath .\SignFileConfig.json -CompanyName 'Contoso IT' -KeyLength 2048
+
+        Resolves the effective settings, merging the supplied command line
+        values with any policy-governed overrides found in the config file.
+
     .OUTPUTS
         System.Management.Automation.PSCustomObject with properties:
         RequireADCSCertificate, CertificateStore, CompanyName, KeyLength,
         ValidityLength, CertTemplate, TimestampServer.
     #>
+    [CmdletBinding()]
     param(
         [switch]$RequireADCSCertificate,
         [switch]$UsePersonalCertificate,
@@ -448,6 +456,19 @@ function New-CodesigningCert {
         ADCS certificate template name to request against (not its display
         name, if they differ).
 
+    .EXAMPLE
+        New-CodesigningCert -CertStore 'Cert:\LocalMachine\My' -CompanyName 'Contoso IT' -CertTemplate 'CodeSigning'
+
+        Attempts to obtain a certificate from ADCS using the 'CodeSigning'
+        template, falling back to a self-signed certificate if ADCS is
+        unreachable or the request fails.
+
+    .EXAMPLE
+        New-CodesigningCert -CertStore 'Cert:\LocalMachine\My' -CompanyName 'Contoso IT' -ADCSRequired -WhatIf
+
+        Shows what would happen when requiring an ADCS-issued certificate,
+        without making any actual changes.
+
     .OUTPUTS
         System.Security.Cryptography.X509Certificates.X509Certificate2, or
         nothing if a request is left Pending CA manager approval.
@@ -604,38 +625,40 @@ function Get-FileToSign {
     <#
     .SYNOPSIS
         Gets the file(s) to be signed, either from a parameter or an interactive file picker.
-
     .DESCRIPTION
         If -Path is supplied, validates and returns those paths. If not, opens a
         multi-select Windows file picker with filters for PowerShell-signable file
         types, a broader Authenticode-signable category, and an all-files fallback.
-
     .PARAMETER Path
         A file path supplied directly, e.g. from the command line. If
         omitted, an interactive file picker is shown instead.
+    .EXAMPLE
+        Get-FileToSign -Path .\Deploy-Server.ps1
 
+        Validates and returns the resolved path to the specified file.
+    .EXAMPLE
+        Get-FileToSign
+
+        Opens an interactive, multi-select file picker filtered to
+        PowerShell-signable and general Authenticode-signable file types.
     .OUTPUTS
         System.String[]
-
     .NOTES
         Requires PowerShell to be running in a Single-Threaded Apartment (STA) for the
         file picker dialog to behave reliably. Windows PowerShell 5.1 defaults to STA.
         PowerShell 7+ defaults to MTA, and will need to be started with 'pwsh.exe -STA'
         for the dialog to work correctly.
-
         PowerShell-signable extension list combines Microsoft's documented set
         (.ps1, .psm1, .psd1, .ps1xml, .cdxml, .xaml) with the SIP-registered extensions
         identified by community research (.psc1, .mof). Worth confirming against
         Get-AuthenticodeSignature in your environment if a type you rely on is missing.
     #>
-
     [CmdletBinding()]
     [OutputType([string[]])]
     param (
         [Parameter()]
         [string]$Path
     )
-
     if ($Path) {
         if (-not (Test-Path -Path $Path -PathType Leaf)) {
             Write-Warning "No file found at '$Path'. Falling back to interactive file picker."
@@ -647,26 +670,20 @@ function Get-FileToSign {
     else {
         Write-Verbose "No -Path supplied, opening file picker."
     }
-
     if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
         Write-Warning "PowerShell is not running in STA mode. The file picker may fail or behave unexpectedly. If it does, restart with 'pwsh.exe -STA' (or 'powershell.exe -STA' on Windows PowerShell)."
     }
-
     Add-Type -AssemblyName System.Windows.Forms
-
     $dialog = [System.Windows.Forms.OpenFileDialog]::new()
     $dialog.Title = 'Select file(s) to sign'
     $dialog.Multiselect = $true
     $dialog.Filter = 'PowerShell Files (*.ps1;*.psm1;*.psd1;*.ps1xml;*.psc1;*.cdxml;*.mof;*.xaml)|*.ps1;*.psm1;*.psd1;*.ps1xml;*.psc1;*.cdxml;*.mof;*.xaml|Other Signable Files (*.exe;*.dll;*.msi;*.cat;*.js;*.vbs;*.ocx;*.cab)|*.exe;*.dll;*.msi;*.cat;*.js;*.vbs;*.ocx;*.cab|All Files (*.*)|*.*'
     $dialog.FilterIndex = 1
-
     $result = $dialog.ShowDialog()
-
     if ($result -ne [System.Windows.Forms.DialogResult]::OK -or $dialog.FileNames.Count -eq 0) {
         Write-Warning "No files selected."
         return @()
     }
-
     Write-Verbose "$($dialog.FileNames.Count) file(s) selected."
     return $dialog.FileNames
 }
@@ -676,7 +693,6 @@ function Set-FileSignature {
     <#
     .SYNOPSIS
         Signs one or more files with a code signing certificate.
-
     .DESCRIPTION
         Wraps Set-AuthenticodeSignature for each file in the supplied list,
         optionally applying an RFC 3161 timestamp. Each file's signing result is
@@ -684,40 +700,32 @@ function Set-FileSignature {
         by default), and a summary of successes and failures is returned so the
         caller can decide how to handle partial failure, including setting an
         appropriate exit code for unattended runs.
-
     .PARAMETER FileList
         One or more file paths to sign.
-
     .PARAMETER SigningCertificate
         The code signing certificate to sign with.
-
     .PARAMETER TimestampServer
         URL of an RFC 3161 timestamp server. If omitted, files are signed
         without a timestamp, meaning each signature's validity becomes tied to
         the signing certificate's own expiry rather than remaining valid
         indefinitely.
-
     .OUTPUTS
         System.Management.Automation.PSCustomObject with properties: Total,
         Succeeded, Failed (an array of file paths that failed to sign).
-
     .EXAMPLE
         Set-FileSignature -FileList $files -SigningCertificate $cert -TimestampServer 'http://timestamp.digicert.com'
-
         Signs each file in $files with $cert, applying a trusted timestamp.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param (
         [Parameter(Mandatory)]
-        $FileList,
+        [string[]]$FileList,
         [Parameter(Mandatory)]
-        $SigningCertificate,
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$SigningCertificate,
         [Parameter()]
-        $TimestampServer
+        [string]$TimestampServer
     )
-
     $failures = @()
-
     foreach ($file in $FileList) {
         $signParams = @{
             Certificate   = $SigningCertificate
@@ -728,22 +736,20 @@ function Set-FileSignature {
         if ($TimestampServer) {
             $signParams['TimestampServer'] = $TimestampServer
         }
-
-        $result = Set-AuthenticodeSignature @signParams
-
-        if ($result.Status -eq 'Valid') {
-            Write-Verbose "Signed successfully: $($file)"
-        }
-        else {
-            $failures += $file
-            Write-Warning "Failed to sign $($file). Status: $($result.Status). $($result.StatusMessage)"
+        if ($PSCmdlet.ShouldProcess($file, 'Sign file')) {
+            $result = Set-AuthenticodeSignature @signParams
+            if ($result.Status -eq 'Valid') {
+                Write-Verbose "Signed successfully: $($file)"
+            }
+            else {
+                $failures += $file
+                Write-Warning "Failed to sign $($file). Status: $($result.Status). $($result.StatusMessage)"
+            }
         }
     }
-
     if ($failures) {
         Write-Warning "$($failures.Count) of $($fileList.Count) file(s) failed to sign."
     }
-
     return [PSCustomObject]@{
         Total     = $fileList.Count
         Succeeded = $fileList.Count - $failures.Count
@@ -784,7 +790,6 @@ if (-not $filesToSign) {
     Write-Warning "No files chosen to sign - exiting"
     exit 1
 }
-
 
 ## Sign files
 $signResult = Set-FileSignature -FileList $filesToSign -SigningCertificate $codeSigningCert -TimestampServer $variables.timestampServer
