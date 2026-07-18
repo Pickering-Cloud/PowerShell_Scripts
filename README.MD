@@ -24,7 +24,7 @@ Each script lives in its own subfolder, with its own `README.MD` and `CHANGELOG.
 | Script | Description |
 |---|---|
 | [`FileSigning`](./FileSigning/README.md) | Signs one or more files with a code signing certificate, obtained from an existing store entry, ADCS, or a self-signed fallback. |
-| [`WSUS-ClientSync`](./WSUS/Client-Sync/README.md) | Forces a Windows client to check in against its configured WSUS server, collects diagnostic information, and optionally remediates common synchronisation and installation errors automatically. |
+| [`WSUS-ClientSync`](./WSUS/ClientSync/README.md) | Forces a Windows client to check in against its configured WSUS server, collects diagnostic information, and optionally remediates common synchronisation and installation errors automatically. |
 ---
 
 
