@@ -150,13 +150,17 @@ function Write-Log {
     param (
         [Parameter(Mandatory)]
         [string]$Message,
-        [ValidateSet("INFO", "WARN", "ERROR", "CRITICAL")]
+        [ValidateSet("DEBUG", "INFO", "WARN", "ERROR", "CRITICAL")]
         [string]$Level = "INFO"
     )
     $prefix = "[$Level]"
 
+    if ($Level -eq "DEBUG" -and $DebugPreference -eq "SilentlyContinue") {
+        return
+    }
+
     if (Configure-LogPath) {
-        $time = Get-Date -Format "HH:mm:SS.zzz"
+        $time = Get-Date -Format "HH:mm:ss.fff"
         $entry = "$time | $prefix | $Message"
         Add-Content -Value $entry -Path $logPath
         Write-Host $entry
@@ -195,6 +199,7 @@ function Configure-ReportPath {
             Relies on the script-scoped $reportPath variable rather than taking a
             parameter, since it's only ever called internally by Write-Report.
     #>
+    Write-Log "Running Configure-ReportPath" -Level DEBUG
     $reportDir = Split-Path -Path $reportPath -Parent
 
     if (-not (Test-Path $reportDir)) {
@@ -256,6 +261,8 @@ function Write-Report {
         [string]$Reason = ""
     )
 
+    Write-Log "Running Write-Report" -Level DEBUG
+
     if (Configure-ReportPath) {
         $entry = [PSCustomObject]@{
             Timestamp         = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -300,6 +307,7 @@ function Test-Config {
         .NOTES
             Relies on the script-scoped $configPath variable.
     #>
+    Write-Log "Running Test-Config" -Level DEBUG
     
     if (-not (Test-Path $configPath)) {
         Write-DefaultConfig
@@ -329,6 +337,7 @@ function Write-DefaultConfig {
             Called internally by Test-Config when no config file is found. Relies
             on the script-scoped $configPath variable.
     #>
+    Write-Log "Running Write-DefaultConfig" -Level DEBUG
     
     $configData = @"
 @{
@@ -377,6 +386,7 @@ function Update-Config {
             Called internally by Connect-TenantMG after New-OWAServicePrincipal
             completes. Relies on the script-scoped $configPath variable.
     #>
+    Write-Log "Running Update-Config" -Level DEBUG
     param(
         [string]$TenantId,
         [string]$ClientId,
@@ -427,6 +437,7 @@ function Test-RequiredModules {
     param (
         [array]$Modules
     )
+    Write-Log "Running Test-RequiredModules" -Level DEBUG
 
     foreach ($module in $modules) {
         Try {
@@ -468,6 +479,7 @@ function Connect-TenantMG {
             Relies on the script-scoped $Setup switch and $tenantID,
             $applicationID, $applicationThumbprint variables.
     #>
+    Write-Log "Running Connect-TenantMG" -Level DEBUG
     if (-not (Test-ServicePrincipalDetails)) {
         if (-not $Setup) {
             Write-Log -Message "Service principal not configured. Re-run with -Setup to provision it interactively." -Level CRITICAL
@@ -518,6 +530,7 @@ function Connect-TenantEXO {
             by Entra role and certificate propagation delay - wait a few minutes
             and re-run.
     #>
+    Write-Log "Running Connect-TenantEXO" -Level DEBUG
     Try {
         $initialDomain = (Get-MgOrganization).VerifiedDomains | Where-Object { $_.IsInitial } | Select-Object -ExpandProperty Name
     }
@@ -561,6 +574,7 @@ function Test-ServicePrincipalDetails {
             Relies on the script-scoped $tenantID, $applicationID, and
             $applicationThumbprint variables.
     #>
+    Write-Log "Running Test-ServicePrincipalDetails" -Level DEBUG
     if ([string]::IsNullOrWhiteSpace($applicationID) -or [string]::IsNullOrWhiteSpace($tenantID)) {
         return $false
     }
@@ -637,7 +651,7 @@ function New-OWAServicePrincipal {
         [string]$CertSubject    = "CN=OWAManageAutomation",
         [int]$CertValidityYears = 2
     )
-
+    Write-Log "Running New-OWAServicePrincipal" -Level DEBUG
     Write-Log -Message "Starting interactive service principal setup."
 
     Try {
@@ -794,6 +808,7 @@ function Get-TenantSkuMap {
         .NOTES
             Requires the Organization.Read.All Graph application permission.
     #>
+    Write-Log "Running Get-TenantSkuMap" -Level DEBUG
     Try {
         $skus = Get-MgSubscribedSku -All -ErrorAction Stop
     }
@@ -833,6 +848,7 @@ function Get-AllTenantUsers {
         .NOTES
             Requires the User.Read.All Graph application permission.
     #>
+    Write-Log "Running Get-AllTenantUsers" -Level DEBUG
     Try {
         $allUsers = Get-MgUser -All -Property Id, DisplayName, UserPrincipalName, AssignedLicenses -ErrorAction Stop
     }
@@ -868,6 +884,7 @@ function Get-AllTenantMailboxes {
         .NOTES
             Requires an active Exchange Online connection (Connect-TenantEXO).
     #>
+    Write-Log "Running Get-AllTenantMailboxes" -Level DEBUG
     Try {
         $allMailboxes = Get-EXOMailbox -ResultSize Unlimited -RecipientTypeDetails UserMailbox -Properties UserPrincipalName -ErrorAction Stop
     }
@@ -912,6 +929,7 @@ function Get-F1LicensedUsers {
         [Parameter(Mandatory)]
         [array]$AllUsers
     )
+    Write-Log "Running Get-F1LicensedUsers" -Level DEBUG
 
     $f1SkuIds = $SkuMap.Keys | Where-Object { $SkuMap[$_] -in @("SPE_F1", "DESKLESSPACK") }
 
@@ -979,6 +997,7 @@ function Get-OrphanedMailboxUsers {
         [Parameter(Mandatory)]
         [array]$AllMailboxes
     )
+    Write-Log "Running Get-OrphanedMailboxUsers" -Level DEBUG
 
     $usersByUpn = @{}
     foreach ($user in $AllUsers) {
@@ -1035,6 +1054,7 @@ function Get-BlockedUsersState {
         .NOTES
             Relies on the script-scoped $stateFilePath variable.
     #>
+    Write-Log "Running Get-BlockedUsersState" -Level DEBUG
     if (-not (Test-Path $stateFilePath)) {
         return @{}
     }
@@ -1089,6 +1109,7 @@ function Block-UserOWA {
         [Parameter(Mandatory)]
         [string]$Reason
     )
+    Write-Log "Running Block-UserOWA" -Level DEBUG
 
     $setParams = @{ Identity = $UserPrincipalName }
     foreach ($param in $owaClientParameters) {
@@ -1142,6 +1163,7 @@ function Unblock-UserOWA {
         [Parameter(Mandatory)]
         [string]$DisplayName
     )
+    Write-Log "Running Unblock-UserOWA" -Level DEBUG
 
     $setParams = @{ Identity = $UserPrincipalName }
     foreach ($param in $owaClientParameters) {
@@ -1203,6 +1225,7 @@ function Update-OWABlockStatus {
         [Parameter(Mandatory)]
         [hashtable]$CurrentState
     )
+    Write-Log "Running Update-OWABlockStatus" -Level DEBUG
 
     $UsersToBlock = @($UsersToBlock | Where-Object { $null -ne $_ })
 
@@ -1290,6 +1313,7 @@ function Save-BlockedUsersState {
         [Parameter(Mandatory)]
         [hashtable]$State
     )
+    Write-Log "Running Save-BlockedUsersState" -Level DEBUG
 
     $stateDir = Split-Path -Path $stateFilePath -Parent
     if (-not (Test-Path $stateDir)) {
