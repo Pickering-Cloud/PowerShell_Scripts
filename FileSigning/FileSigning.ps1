@@ -317,7 +317,7 @@ function Test-Prerequisites {
     [CmdletBinding()]
     param()
     if (-not (Get-Module -ListAvailable -Name PKI)) {
-        throw "The PKI module is not available on this machine. It ships with the AD CS Remote Server Administration Tools feature (Windows 8.1 / Server 2012 R2 and later). Enable it via 'Add-WindowsFeature RSAT-ADCS' (Server) or the Windows Optional Features UI (client), then re-run this script."
+        Write-Log -Message "The PKI module is not available on this machine. It ships with the AD CS Remote Server Administration Tools feature (Windows 8.1 / Server 2012 R2 and later). Enable it via 'Add-WindowsFeature RSAT-ADCS' (Server) or the Windows Optional Features UI (client), then re-run this script." -Level CRITICAL
     }
     Import-Module -Name PKI -Scope Local -ErrorAction Stop
     Write-Log "PKI module loaded successfully."
@@ -396,7 +396,7 @@ function Get-ScriptVariables {
             $config = Get-Content -Path $configFilePath -Raw | ConvertFrom-Json -ErrorAction Stop
         } 
         catch {
-            throw "Failed to parse config file $($configFilePath): $($_.Exception.Message)"
+            Write-Log -Message "Failed to parse config file $($configFilePath): $($_.Exception.Message)" -Level CRITICAL
         }
 
         if ($null -ne $config.RequireADCSCertificate) {
@@ -489,9 +489,11 @@ function Get-ExistingCodeSigningCert {
         }
         
         if ($codeSigningCert) {
+            Write-Log -Message "Found existing usable code signing certificate: $($codeSigningCert.Thumbprint), expires $($codeSigningCert.NotAfter)."
             return $codeSigningCert
         }
         else {
+            Write-Log -Message "No usable existing code signing certificate found in $CertificateStore."
             return $false
         }
     }
@@ -641,6 +643,7 @@ function New-CodesigningCert {
                     if ($result.Status -eq 'Issued') {
                         Remove-Item -Path $PendingStateFile -Force
                         $newCert = $result.Certificate
+                        Write-Log -Message "Previously pending ADCS request (thumbprint $($state.Thumbprint)) is now issued."
                     }
                     else {
                         Write-Log "Request $($state.Thumbprint) is still $($result.Status). Re-run once approved." -Level WARN
@@ -668,6 +671,7 @@ function New-CodesigningCert {
                 switch ($result.Status) {
                     'Issued' {
                         $newCert = $result.Certificate
+                        Write-Log -Message "ADCS issued certificate $($newCert.Thumbprint) using template '$CertTemplate'."
                     }
                     'Pending' {
                         $thumbprint = $result.Request.Thumbprint
@@ -687,13 +691,14 @@ function New-CodesigningCert {
     # If ADCS was unreachable or the request failed, fall back to self-signed
     catch {
         if ($ADCSRequired) {
-            throw "ADCSRequired is set but a certificate could not be obtained from ADCS: $($_.Exception.Message)"
+            Write-Log -Message "ADCSRequired is set but a certificate could not be obtained from ADCS: $($_.Exception.Message)" -Level CRITICAL
         }
 
         Write-Log "ADCS certificate unavailable, falling back to self-signed: $($_.Exception.Message)" -Level WARN
 
         if ($PSCmdlet.ShouldProcess("CN=$CompanyName", 'Create self-signed code signing certificate')) {
             $newCert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=$($CompanyName)" -CertStoreLocation $CertStore -KeySpec Signature -KeyUsage DigitalSignature -KeyLength $KeyLength -HashAlgorithm SHA256 -NotAfter ((Get-Date).AddYears($ValidityLength)) -FriendlyName "Self-signed code signing cert - generated $(Get-Date -Format 'yyyy-MM-dd')" -KeyExportPolicy Exportable
+            Write-Log -Message "Self-signed certificate created: $($newCert.Thumbprint), expires $($newCert.NotAfter)." -Level WARN
         }
         $storeLocation = [System.Security.Cryptography.X509Certificates.StoreLocation]::$Scope
 
@@ -756,7 +761,7 @@ function Get-FileToSign {
         [Parameter()]
         [string]$Path
     )
-    if ($Path) {
+        if ($Path) {
         if (-not (Test-Path -Path $Path -PathType Leaf)) {
             Write-Log "No file found at '$Path'. Falling back to interactive file picker." -Level WARN
         }
@@ -783,7 +788,6 @@ function Get-FileToSign {
     }
     Write-Log "$($dialog.FileNames.Count) file(s) selected."
     return $dialog.FileNames
-}
 
 # Sign file(s)
 function Set-FileSignature {
@@ -822,7 +826,7 @@ function Set-FileSignature {
         [Parameter()]
         [string]$TimestampServer
     )
-    $failures = @()
+        $failures = @()
     foreach ($file in $FileList) {
         $signParams = @{
             Certificate   = $SigningCertificate
@@ -852,7 +856,6 @@ function Set-FileSignature {
         Succeeded = $fileList.Count - $failures.Count
         Failed    = $failures
     }
-}
 
 ##################################################
 # Script
