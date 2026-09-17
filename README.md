@@ -68,3 +68,7 @@ See [LICENSE](LICENSE). This applies repository-wide unless a specific script's 
 ## Author
 
 Bradley Pickering
+
+## Buy Me A Coffee
+
+[Buy me a coffee](https://pckr.ing/bmac)
